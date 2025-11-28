@@ -3,40 +3,87 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import os
+import plotly.figure_factory as ff
+import warnings
 
 # ML & Stats Libraries
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.cluster import KMeans, IsolationForest
+from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix,
     mean_absolute_error, mean_squared_error, r2_score
 )
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import (
+    RandomForestClassifier, RandomForestRegressor, 
+    GradientBoostingClassifier, GradientBoostingRegressor
+)
 from xgboost import XGBClassifier, XGBRegressor
 from catboost import CatBoostClassifier, CatBoostRegressor
 from prophet import Prophet
 from prophet.plot import plot_plotly
 
+warnings.filterwarnings('ignore')
+
 # ==========================================
-# 1. UTILITY FUNCTIONS (Merged from Modules)
+# 0. UI CONFIGURATION & CSS STYLING
+# ==========================================
+st.set_page_config(
+    page_title="NCR Ride Analytics Pro V2", 
+    page_icon="🚖", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for Beautification
+st.markdown("""
+<style>
+    /* Main Background */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+    /* Metric Cards */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+    }
+    /* Headers */
+    h1, h2, h3 {
+        color: #2c3e50;
+        font-family: 'Segoe UI', sans-serif;
+    }
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #2c3e50;
+    }
+    /* Custom Info Box */
+    .info-box {
+        background-color: #e8f4f8;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 5px solid #3498db;
+        margin-bottom: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 1. UTILITY FUNCTIONS
 # ==========================================
 
 # --- Preprocessing ---
 def clean_data(df, impute_strat='Median', clip_outliers=True):
-    """Performs comprehensive cleaning on the NCR rides dataset."""
-    
-    # Date & Time Handling
+    """Performs comprehensive cleaning."""
     try:
-        # Combine Date and Time if strictly necessary, but Date is usually enough for daily aggregation
         df['DateTime'] = pd.to_datetime(df['Date'].astype(str) + ' ' + df['Time'].astype(str), errors='coerce')
         df = df.sort_values('DateTime')
     except Exception:
         pass 
 
-    # Numerical Imputation
     numeric_cols = [
         'Avg VTAT', 'Avg CTAT', 'Booking Value', 'Ride Distance', 
         'Driver Ratings', 'Customer Rating', 'Incomplete Rides',
@@ -54,16 +101,12 @@ def clean_data(df, impute_strat='Median', clip_outliers=True):
                 val = 0
             df[col] = df[col].fillna(val)
 
-    # Categorical Imputation
-    cat_cols = [
-        'Reason for cancelling by Customer', 'Driver Cancellation Reason', 
-        'Incomplete Rides Reason', 'Payment Method', 'Vehicle Type', 'Booking Status'
-    ]
+    cat_cols = ['Reason for cancelling by Customer', 'Driver Cancellation Reason', 
+                'Incomplete Rides Reason', 'Payment Method', 'Vehicle Type', 'Booking Status']
     for col in cat_cols:
         if col in df.columns:
             df[col] = df[col].fillna("Unknown")
 
-    # Outlier Clipping (IQR)
     if clip_outliers:
         for col in ['Booking Value', 'Ride Distance', 'Avg VTAT']:
             if col in df.columns:
@@ -78,46 +121,31 @@ def clean_data(df, impute_strat='Median', clip_outliers=True):
 
 # --- Feature Engineering ---
 def engineer_features(df, loc_clusters=5):
-    """Generates new features for ML models."""
+    """Generates temporal, cluster, and interaction features."""
     df_eng = df.copy()
     
-    # Temporal Features
     if 'DateTime' in df_eng.columns:
         df_eng['month'] = df_eng['DateTime'].dt.month
-        df_eng['day_of_week'] = df_eng['DateTime'].dt.dayofweek
-        df_eng['is_weekend'] = df_eng['day_of_week'].apply(lambda x: 1 if x >= 5 else 0)
+        df_eng['day_of_week'] = df_eng['DateTime'].dt.day_name()
         df_eng['hour'] = df_eng['DateTime'].dt.hour
-        df_eng['minute'] = df_eng['DateTime'].dt.minute
-        # Cyclical Time Encoding
+        df_eng['is_weekend'] = df_eng['DateTime'].dt.dayofweek.apply(lambda x: 1 if x >= 5 else 0)
+        # Cyclical Features
         df_eng['sin_hour'] = np.sin(2 * np.pi * df_eng['hour'] / 24)
         df_eng['cos_hour'] = np.cos(2 * np.pi * df_eng['hour'] / 24)
     
-    # Location Clustering (Text-based approximation)
     le = LabelEncoder()
     if 'Pickup Location' in df_eng.columns:
         loc_numeric = le.fit_transform(df_eng['Pickup Location'].astype(str)).reshape(-1, 1)
         kmeans = KMeans(n_clusters=loc_clusters, random_state=42, n_init=10)
         df_eng['pickup_cluster'] = kmeans.fit_predict(loc_numeric)
-        
-    if 'Drop Location' in df_eng.columns:
-        loc_numeric_drop = le.fit_transform(df_eng['Drop Location'].astype(str)).reshape(-1, 1)
-        kmeans_drop = KMeans(n_clusters=loc_clusters, random_state=42, n_init=10)
-        df_eng['drop_cluster'] = kmeans_drop.fit_predict(loc_numeric_drop)
-
-    # Rating Features
-    if 'Driver Ratings' in df_eng.columns and 'Customer Rating' in df_eng.columns:
-        df_eng['rating_gap'] = df_eng['Driver Ratings'] - df_eng['Customer Rating']
     
-    # One-Hot Encoding for Reasons (keep original for CatBoost if needed later)
-    reasons = ['Reason for cancelling by Customer', 'Driver Cancellation Reason', 'Incomplete Rides Reason']
-    for r in reasons:
-        if r in df_eng.columns:
-            dummies = pd.get_dummies(df_eng[r], prefix=r.split()[0][:3])
-            df_eng = pd.concat([df_eng, dummies], axis=1)
-            
+    # Interaction Feature: Value per km
+    if 'Booking Value' in df_eng.columns and 'Ride Distance' in df_eng.columns:
+        df_eng['value_per_km'] = df_eng['Booking Value'] / (df_eng['Ride Distance'] + 1e-5)
+
     return df_eng
 
-# --- Modeling Helpers ---
+# --- Modeling Wrappers ---
 def get_feature_importance(model, feature_names, model_type):
     if model_type == 'CatBoost':
         importance = model.get_feature_importance()
@@ -127,325 +155,332 @@ def get_feature_importance(model, feature_names, model_type):
     df_imp = pd.DataFrame({'Feature': feature_names, 'Importance': importance})
     df_imp = df_imp.sort_values(by='Importance', ascending=False).head(15)
     
-    fig = px.bar(df_imp, x='Importance', y='Feature', orientation='h', title=f'{model_type} Feature Importance')
+    fig = px.bar(df_imp, x='Importance', y='Feature', orientation='h', 
+                 title=f'✨ {model_type} Key Drivers', color='Importance', color_continuous_scale='Viridis')
     return fig
 
-def train_classification(df, target, model_type='RandomForest'):
-    # Drop non-numeric/high-cardinality columns
-    exclude_cols = [target, 'Date', 'Time', 'DateTime', 'Booking ID', 'Customer ID', 'Booking Status',
-                    'Pickup Location', 'Drop Location', 'Reason for cancelling by Customer', 
-                    'Driver Cancellation Reason', 'Incomplete Rides Reason']
-    
-    X = df.drop(columns=[c for c in exclude_cols if c in df.columns], errors='ignore')
-    X = X.select_dtypes(include=[np.number]) 
-    y = df[target]
-    
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    if model_type == 'RandomForest':
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-    elif model_type == 'XGBoost':
-        model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-    elif model_type == 'CatBoost':
-        model = CatBoostClassifier(verbose=0)
-    
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    y_prob = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else y_pred
-    
-    results = {
-        'roc_auc': roc_auc_score(y_test, y_prob),
-        'precision': precision_score(y_test, y_pred, zero_division=0),
-        'recall': recall_score(y_test, y_pred, zero_division=0),
-        'f1': f1_score(y_test, y_pred, zero_division=0),
-        'conf_matrix': confusion_matrix(y_test, y_pred),
-        'feat_fig': get_feature_importance(model, X.columns, model_type)
-    }
-    return results
-
-def train_regression(df, target, model_type='RandomForest'):
-    exclude_cols = [target, 'Date', 'Time', 'DateTime', 'Booking ID', 'Customer ID', 'Booking Status',
-                    'Pickup Location', 'Drop Location', 'Reason for cancelling by Customer', 
-                    'Driver Cancellation Reason', 'Incomplete Rides Reason']
-    
-    X = df.drop(columns=[c for c in exclude_cols if c in df.columns], errors='ignore')
-    X = X.select_dtypes(include=[np.number])
-    y = df[target]
-    
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    if model_type == 'RandomForest':
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-    elif model_type == 'XGBoost':
-        model = XGBRegressor()
-    elif model_type == 'CatBoost':
-        model = CatBoostRegressor(verbose=0)
-        
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    
-    results = {
-        'mae': mean_absolute_error(y_test, y_pred),
-        'rmse': np.sqrt(mean_squared_error(y_test, y_pred)),
-        'r2': r2_score(y_test, y_pred),
-        'feat_fig': get_feature_importance(model, X.columns, model_type)
-    }
-    return results
-
-# --- Clustering ---
-def run_clustering(df, k=4):
-    features = ['Booking Value', 'Ride Distance', 'Avg VTAT', 'Driver Ratings', 'Customer Rating']
-    X = df[features].fillna(0)
-    
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-    clusters = kmeans.fit_predict(X_scaled)
-    
-    df_result = df.copy()
-    df_result['Cluster_Label'] = clusters
-    
-    # PCA
-    pca = PCA(n_components=2)
-    components = pca.fit_transform(X_scaled)
-    
-    fig_pca = px.scatter(
-        x=components[:,0], y=components[:,1], 
-        color=clusters.astype(str),
-        title=f"Customer Segments (PCA Projection) - K={k}",
-        labels={'x': 'PC1', 'y': 'PC2', 'color': 'Cluster'}
-    )
-    
-    # Radar Chart
-    cluster_means = pd.DataFrame(X_scaled, columns=features).groupby(clusters).mean()
-    fig_radar = go.Figure()
-    for i in range(k):
-        fig_radar.add_trace(go.Scatterpolar(
-            r=cluster_means.iloc[i].values,
-            theta=features,
-            fill='toself',
-            name=f'Cluster {i}'
-        ))
-    fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[-2, 3])), showlegend=True, title="Cluster Profiles")
-    
-    return df_result, fig_pca, fig_radar
-
-# --- Forecasting ---
-def forecast_demand(df, periods=30):
-    if 'DateTime' not in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'])
-        daily_counts = df.groupby('Date').size().reset_index(name='y')
-        daily_counts.rename(columns={'Date': 'ds'}, inplace=True)
-    else:
-        df['DateOnly'] = df['DateTime'].dt.date
-        daily_counts = df.groupby('DateOnly').size().reset_index(name='y')
-        daily_counts.rename(columns={'DateOnly': 'ds'}, inplace=True)
-        
-    model = Prophet(yearly_seasonality=True, weekly_seasonality=True)
-    model.fit(daily_counts)
-    
-    future = model.make_future_dataframe(periods=periods)
-    forecast = model.predict(future)
-    
-    fig_forecast = plot_plotly(model, forecast)
-    fig_forecast.update_layout(title=f"Ride Demand Forecast ({periods} Days Ahead)")
-    
-    fig_components = go.Figure()
-    fig_components.add_trace(go.Scatter(x=forecast['ds'], y=forecast['trend'], name="Trend"))
-    fig_components.update_layout(title="Underlying Trend Component")
-    
-    return fig_forecast, fig_components, forecast
-
 # ==========================================
-# 2. MAIN STREAMLIT APP LOGIC
+# 2. MAIN APP LAYOUT
 # ==========================================
 
-st.set_page_config(page_title="NCR Ride Analytics Pro", page_icon="🚖", layout="wide")
+st.sidebar.image("https://cdn-icons-png.flaticon.com/512/235/235861.png", width=80)
+st.sidebar.title("🚖 NCR Analytics V2")
+st.sidebar.markdown("---")
 
-st.sidebar.title("🚖 NCR Analytics Suite")
-page = st.sidebar.radio("Navigate", [
-    "1. Data Overview",
-    "2. Preprocessing", 
-    "3. Feature Engineering",
-    "4. ML Classification (Cancellation)",
-    "5. ML Regression (Booking Value)",
-    "6. Clustering & Segmentation",
-    "7. Time-Series Forecasting"
+page = st.sidebar.radio("Navigate Module", [
+    "1. 🏠 Data Cockpit",
+    "2. 🧹 Smart Preprocessing", 
+    "3. 🎨 Visual Deep Dive",
+    "4. ⚙️ Feature Lab",
+    "5. 🤖 Predictive ML (Classif.)",
+    "6. 💰 Revenue AI (Regress.)",
+    "7. 🕵️ Anomaly Detection (New)",
+    "8. 🎯 Customer Segmentation",
+    "9. 📈 Demand Forecasting"
 ])
 
-# Initialize Session State
-if 'raw_df' not in st.session_state:
-    st.session_state['raw_df'] = None
-if 'clean_df' not in st.session_state:
-    st.session_state['clean_df'] = None
-if 'engineered_df' not in st.session_state:
-    st.session_state['engineered_df'] = None
+# Session State Init
+for key in ['raw_df', 'clean_df', 'engineered_df']:
+    if key not in st.session_state:
+        st.session_state[key] = None
 
-# --- PAGE 1: DATA OVERVIEW ---
-if page == "1. Data Overview":
-    st.title("📂 Data Overview & Profiling")
+# --- PAGE 1: DATA COCKPIT (Enhanced) ---
+if page == "1. 🏠 Data Cockpit":
+    st.title("🏠 Data Cockpit & Profiling")
+    st.markdown("Upload your raw data to get a comprehensive 360-degree view.")
     
     uploaded_file = st.file_uploader("Upload ncr_ride_bookings.csv", type=["csv"])
     
     if uploaded_file:
-        try:
-            df = pd.read_csv(uploaded_file)
-            st.session_state['raw_df'] = df
-            st.success("File uploaded successfully!")
-            st.markdown("### 🔍 Dataset Preview")
-            st.dataframe(df.head())
+        df = pd.read_csv(uploaded_file)
+        st.session_state['raw_df'] = df
+        
+        # Top Level Metrics
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Rides", f"{df.shape[0]:,}", delta="Raw Data")
+        col2.metric("Total Revenue", f"₹{df['Booking Value'].sum():,.0f}", help="Sum of Booking Value (pre-cleaning)")
+        col3.metric("Avg Ride Dist", f"{df['Ride Distance'].mean():.1f} km")
+        col4.metric("Missing Values", f"{df.isnull().sum().sum():,}", delta_color="inverse")
+        
+        st.markdown("---")
+        
+        # Tabs for detailed view
+        tab1, tab2, tab3 = st.tabs(["📊 Dataset Preview", "📈 Advanced Statistics", "🔥 Missing Heatmap"])
+        
+        with tab1:
+            st.dataframe(df.head(), use_container_width=True)
+            st.caption("First 5 rows of the uploaded dataset.")
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Rows", df.shape[0])
-            col1.metric("Columns", df.shape[1])
-            col2.metric("Duplicates", df.duplicated().sum())
-            col3.metric("Missing Values", df.isnull().sum().sum())
+        with tab2:
+            st.subheader("Descriptive Statistics")
+            st.markdown("""
+            <div class='info-box'>
+            <b>💡 Stats Explained:</b><br>
+            - <b>Skewness:</b> Measures asymmetry. >1 means long tail on right (outliers).<br>
+            - <b>Kurtosis:</b> Measures 'tailedness'. High value = heavy outliers.
+            </div>
+            """, unsafe_allow_html=True)
             
-            st.markdown("### 🧬 Column Types")
-            st.write(df.dtypes.astype(str))
+            desc = df.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95, 0.99]).T
+            # Calculate Skew/Kurt only for numeric
+            numeric_df = df.select_dtypes(include=np.number)
+            desc['skew'] = numeric_df.skew()
+            desc['kurtosis'] = numeric_df.kurt()
+            st.dataframe(desc.style.background_gradient(cmap='Blues'), use_container_width=True)
             
-            st.markdown("### 🔥 Missing Value Heatmap")
-            fig = px.imshow(df.isnull(), color_continuous_scale='RdBu_r', title="Null Value Distribution")
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
-    
-    elif st.session_state['raw_df'] is not None:
-        st.info("Using previously uploaded data.")
-        st.dataframe(st.session_state['raw_df'].head())
-    else:
-        st.warning("Please upload a dataset to begin.")
+        with tab3:
+            fig_null = px.imshow(df.isnull(), color_continuous_scale='RdBu_r', aspect='auto')
+            st.plotly_chart(fig_null, use_container_width=True)
 
 # --- PAGE 2: PREPROCESSING ---
-elif page == "2. Preprocessing":
-    st.title("🧹 Automated Preprocessing Pipeline")
+elif page == "2. 🧹 Smart Preprocessing":
+    st.title("🧹 Smart Preprocessing Pipeline")
     
     if st.session_state['raw_df'] is None:
-        st.warning("Please upload data in Page 1 first.")
+        st.warning("⚠️ Please upload data in the Cockpit first.")
     else:
-        st.markdown("### Configuration")
+        st.markdown("<div class='info-box'><b>Why this matters:</b> Real-world data is messy. This pipeline fills missing values using statistical medians and caps extreme outliers (like a ₹100,000 ride) using the IQR method.</div>", unsafe_allow_html=True)
+        
         col1, col2 = st.columns(2)
         with col1:
-            impute_strategy = st.selectbox("Numerical Imputation", ["Median", "Mean", "Zero"])
+            impute_strategy = st.selectbox("Numerical Imputation Strategy", ["Median (Robust)", "Mean", "Zero"])
         with col2:
-            handle_outliers = st.checkbox("Clip Outliers (IQR Method)", value=True)
+            handle_outliers = st.checkbox("Clip Outliers (IQR Method)", value=True, help="Caps values at 1.5*IQR to remove extreme anomalies.")
             
-        if st.button("Run Preprocessing"):
-            with st.spinner("Cleaning data..."):
-                df_clean = clean_data(
-                    st.session_state['raw_df'].copy(), 
-                    impute_strat=impute_strategy,
-                    clip_outliers=handle_outliers
-                )
+        if st.button("🚀 Run Cleaning Pipeline", type="primary"):
+            with st.spinner("Scrubbing data..."):
+                df_clean = clean_data(st.session_state['raw_df'].copy(), impute_strat=impute_strategy.split()[0], clip_outliers=handle_outliers)
                 st.session_state['clean_df'] = df_clean
-                st.success("Preprocessing Complete!")
-                st.markdown("### 📊 Post-Processing Stats")
-                st.dataframe(df_clean.describe())
-                st.markdown("#### Null Check (Should be 0)")
-                st.write(df_clean.isnull().sum()[df_clean.isnull().sum() > 0])
+                st.success("✅ Data Cleaned Successfully!")
+                
+                # Validation
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Rows Retained", len(df_clean))
+                with col2:
+                    remaining_nulls = df_clean.isnull().sum().sum()
+                    st.metric("Remaining Nulls", remaining_nulls, delta="Ideal: 0", delta_color="normal" if remaining_nulls==0 else "inverse")
 
-# --- PAGE 3: FEATURE ENGINEERING ---
-elif page == "3. Feature Engineering":
-    st.title("⚙️ Feature Engineering Factory")
+# --- PAGE 3: VISUAL DEEP DIVE (NEW) ---
+elif page == "3. 🎨 Visual Deep Dive":
+    st.title("🎨 Visual Analytics Explorer")
     
     if st.session_state['clean_df'] is None:
-        st.warning("Please run Preprocessing in Page 2 first.")
+        st.warning("⚠️ Please run Preprocessing first.")
     else:
-        st.write("Generates temporal features, location clusters, and one-hot encoded reasons.")
-        n_clusters = st.slider("Number of Location Clusters (KMeans)", 3, 10, 5)
+        df = st.session_state['clean_df']
         
-        if st.button("Generate Features"):
-            with st.spinner("Engineering features..."):
-                df_eng = engineer_features(
-                    st.session_state['clean_df'].copy(), 
-                    loc_clusters=n_clusters
-                )
-                st.session_state['engineered_df'] = df_eng
-                st.success("Feature Engineering Complete!")
-                st.markdown("### 🆕 New Features Generated")
-                new_cols = [c for c in df_eng.columns if c not in st.session_state['clean_df'].columns]
-                st.write(new_cols)
-                if 'pickup_cluster' in df_eng.columns:
-                    st.write(df_eng[['Pickup Location', 'pickup_cluster']].drop_duplicates().head(10))
+        # 1. Sunburst
+        st.subheader("1. Hierarchical Status Analysis")
+        st.markdown("Drill down into *Booking Status* → *Reasons*. Click on segments to expand.")
+        
+        # Prep data for sunburst
+        df_sun = df[df['Booking Status'] != 'Completed'].fillna("Unknown")
+        # We need a hierarchy: Status -> Reason
+        # Consolidate reason columns
+        df_sun['Combined_Reason'] = df_sun['Reason for cancelling by Customer'] + df_sun['Driver Cancellation Reason'] + df_sun['Incomplete Rides Reason']
+        df_sun['Combined_Reason'] = df_sun['Combined_Reason'].str.replace("UnknownUnknown", "").str.replace("Unknown", "")
+        df_sun.loc[df_sun['Combined_Reason'] == "", 'Combined_Reason'] = "Unspecified"
+        
+        fig_sun = px.sunburst(
+            df_sun, path=['Booking Status', 'Combined_Reason'], 
+            title="Lost Demand Breakdown (Interactive)",
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        st.plotly_chart(fig_sun, use_container_width=True)
+        
+        col1, col2 = st.columns(2)
+        
+        # 2. Violin Plot
+        with col1:
+            st.subheader("2. Price Distribution by Vehicle")
+            st.markdown("Violin plots show the density of data at different values.")
+            fig_vio = px.violin(df, x="Vehicle Type", y="Booking Value", box=True, points="all", color="Vehicle Type")
+            fig_vio.update_layout(showlegend=False)
+            st.plotly_chart(fig_vio, use_container_width=True)
+            
+        # 3. Heatmap
+        with col2:
+            st.subheader("3. Peak Demand Heatmap")
+            if 'Date' in df.columns and 'Time' in df.columns:
+                df['Temp_DT'] = pd.to_datetime(df['Date'].astype(str) + ' ' + df['Time'].astype(str))
+                df['Day'] = df['Temp_DT'].dt.day_name()
+                df['Hour'] = df['Temp_DT'].dt.hour
+                
+                heatmap_data = df.groupby(['Day', 'Hour']).size().unstack(fill_value=0)
+                # Reorder days
+                days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                heatmap_data = heatmap_data.reindex(days_order)
+                
+                fig_heat = px.imshow(heatmap_data, title="Rides by Day & Hour", color_continuous_scale='Viridis')
+                st.plotly_chart(fig_heat, use_container_width=True)
 
-# --- PAGE 4: ML CLASSIFICATION ---
-elif page == "4. ML Classification (Cancellation)":
-    st.title("🚫 Cancellation Prediction (Classification)")
+# --- PAGE 4: FEATURE ENGINEERING ---
+elif page == "4. ⚙️ Feature Lab":
+    st.title("⚙️ Feature Engineering Lab")
+    
+    if st.session_state['clean_df'] is None:
+        st.warning("⚠️ Clean data required.")
+    else:
+        st.info("Transforms raw timestamps into cyclical features (sin_hour, cos_hour) and uses K-Means to cluster location names into zones.")
+        
+        if st.button("⚡ Generate Advanced Features"):
+            df_eng = engineer_features(st.session_state['clean_df'].copy())
+            st.session_state['engineered_df'] = df_eng
+            st.success("Features Generated!")
+            st.write(df_eng[['DateTime', 'sin_hour', 'pickup_cluster', 'is_weekend']].head())
+
+# --- PAGE 5: ML CLASSIFICATION ---
+elif page == "5. 🤖 Predictive ML (Classif.)":
+    st.title("🤖 Cancellation Prediction AI")
     
     if st.session_state['engineered_df'] is None:
-        st.warning("Please run Feature Engineering in Page 3.")
+        st.error("⚠️ Please run Feature Engineering first.")
     else:
         df = st.session_state['engineered_df'].copy()
-        df['Target_Cancel'] = df['Booking Status'].apply(lambda x: 1 if 'Cancel' in str(x) else 0)
+        df['Target'] = df['Booking Status'].apply(lambda x: 1 if 'Cancel' in str(x) else 0)
         
-        model_type = st.selectbox("Select Model", ["RandomForest", "XGBoost", "CatBoost"])
+        # Feature Selection
+        features = ['Booking Value', 'Ride Distance', 'hour', 'is_weekend', 'sin_hour', 'pickup_cluster']
+        X = df[features].fillna(0)
+        y = df['Target']
         
-        if st.button("Train Classification Model"):
-            with st.spinner(f"Training {model_type}..."):
-                results = train_classification(df, target='Target_Cancel', model_type=model_type)
-                col1, col2, col3 = st.columns(3)
-                col1.metric("ROC AUC", f"{results['roc_auc']:.3f}")
-                col2.metric("Precision", f"{results['precision']:.3f}")
-                col3.metric("Recall", f"{results['recall']:.3f}")
-                st.markdown("### Feature Importance")
-                st.plotly_chart(results['feat_fig'], use_container_width=True)
-                st.markdown("### Confusion Matrix")
-                st.write(results['conf_matrix'])
+        model_name = st.selectbox("Choose Model Architecture", ["Gradient Boosting (Best)", "Random Forest", "XGBoost"])
+        
+        if st.button("Train Classifier"):
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+            
+            if "Random" in model_name: model = RandomForestClassifier()
+            elif "Gradient" in model_name: model = GradientBoostingClassifier()
+            else: model = XGBClassifier()
+            
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            y_prob = model.predict_proba(X_test)[:,1]
+            
+            # Metrics
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("ROC-AUC", f"{roc_auc_score(y_test, y_prob):.3f}", help="Area Under Curve. 1.0 is perfect, 0.5 is random.")
+            c2.metric("Precision", f"{precision_score(y_test, y_pred):.3f}", help="% of predicted cancellations that were actual cancellations.")
+            c3.metric("Recall", f"{recall_score(y_test, y_pred):.3f}", help="% of actual cancellations detected.")
+            c4.metric("F1 Score", f"{f1_score(y_test, y_pred):.3f}")
+            
+            st.plotly_chart(get_feature_importance(model, features, model_name), use_container_width=True)
 
-# --- PAGE 5: ML REGRESSION ---
-elif page == "5. ML Regression (Booking Value)":
-    st.title("💰 Booking Value Prediction (Regression)")
+# --- PAGE 6: ML REGRESSION ---
+elif page == "6. 💰 Revenue AI (Regress.)":
+    st.title("💰 Fare/Revenue Prediction")
+    st.markdown("Predict the `Booking Value` for completed rides.")
     
-    if st.session_state['engineered_df'] is None:
-        st.warning("Please run Feature Engineering in Page 3.")
-    else:
+    if st.session_state['engineered_df'] is not None:
         df = st.session_state['engineered_df'].copy()
-        df_reg = df[df['Booking Status'] == 'Completed']
+        df = df[df['Booking Status'] == 'Completed']
         
-        model_type = st.selectbox("Select Regressor", ["RandomForest", "XGBoost", "CatBoost"])
+        features = ['Ride Distance', 'hour', 'pickup_cluster', 'drop_cluster']
+        X = df[features].fillna(0)
+        y = df['Booking Value']
         
-        if st.button("Train Regression Model"):
-            with st.spinner(f"Training {model_type}..."):
-                results = train_regression(df_reg, target='Booking Value', model_type=model_type)
-                col1, col2, col3 = st.columns(3)
-                col1.metric("MAE", f"₹{results['mae']:.2f}")
-                col2.metric("RMSE", f"₹{results['rmse']:.2f}")
-                col3.metric("R² Score", f"{results['r2']:.3f}")
-                st.markdown("### Feature Importance")
-                st.plotly_chart(results['feat_fig'], use_container_width=True)
+        model_name = st.selectbox("Regressor", ["Gradient Boosting", "Random Forest", "CatBoost"])
+        
+        if st.button("Train Regressor"):
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+            
+            if "Gradient" in model_name: model = GradientBoostingRegressor()
+            elif "Random" in model_name: model = RandomForestRegressor()
+            else: model = CatBoostRegressor(verbose=0)
+            
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            
+            col1, col2 = st.columns(2)
+            col1.metric("RMSE", f"₹{np.sqrt(mean_squared_error(y_test, y_pred)):.2f}", help="Root Mean Squared Error. Typical prediction error in Rupees.")
+            col2.metric("R² Score", f"{r2_score(y_test, y_pred):.3f}", help="Variance explained by the model (Max 1.0).")
+            
+            # Residual Plot
+            st.subheader("Residual Analysis")
+            st.markdown("Ideal residuals should be randomly scattered around 0.")
+            residuals = y_test - y_pred
+            fig_res = px.scatter(x=y_pred, y=residuals, labels={'x': 'Predicted Value', 'y': 'Residuals (Error)'}, title="Residual Plot")
+            fig_res.add_hline(y=0, line_dash="dash", line_color="red")
+            st.plotly_chart(fig_res, use_container_width=True)
 
-# --- PAGE 6: CLUSTERING ---
-elif page == "6. Clustering & Segmentation":
+# --- PAGE 7: ANOMALY DETECTION (NEW) ---
+elif page == "7. 🕵️ Anomaly Detection (New)":
+    st.title("🕵️ Anomaly & Fraud Detection")
+    st.markdown("""
+    <div class='info-box'>
+    Uses <b>Isolation Forest</b> to detect 'strange' rides. 
+    Examples: High price for short distance, weird times, or unusual locations.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if st.session_state['engineered_df'] is not None:
+        df = st.session_state['engineered_df'].copy()
+        cols = ['Booking Value', 'Ride Distance', 'Avg VTAT']
+        X = df[cols].fillna(df[cols].median())
+        
+        contamination = st.slider("Contamination (Expected % of outliers)", 0.01, 0.1, 0.02)
+        
+        if st.button("🔍 Scan for Anomalies"):
+            iso = IsolationForest(contamination=contamination, random_state=42)
+            df['anomaly'] = iso.fit_predict(X)
+            # -1 is anomaly, 1 is normal
+            anomalies = df[df['anomaly'] == -1]
+            
+            st.error(f"⚠️ Found {len(anomalies)} anomalies out of {len(df)} rides!")
+            
+            st.subheader("Anomaly Visualization")
+            fig_anom = px.scatter(df, x="Ride Distance", y="Booking Value", color=df['anomaly'].astype(str),
+                                  color_discrete_map={'-1':'red', '1':'blue'},
+                                  title="Red points are anomalies")
+            st.plotly_chart(fig_anom, use_container_width=True)
+            
+            st.subheader("Inspect Suspicious Rides")
+            st.dataframe(anomalies[cols + ['Booking Status', 'DateTime']].head(20))
+
+# --- PAGE 8: CLUSTERING ---
+elif page == "8. 🎯 Customer Segmentation":
     st.title("🎯 Customer/Ride Segmentation")
+    st.info("Groups rides into 'personas' based on behavior.")
     
-    if st.session_state['engineered_df'] is None:
-        st.warning("Please run Feature Engineering in Page 3.")
-    else:
-        k = st.slider("Number of Segments (K)", 2, 8, 4)
-        if st.button("Run Clustering"):
-            df_clustered, fig_pca, fig_radar = run_clustering(st.session_state['engineered_df'], k)
-            st.plotly_chart(fig_pca, use_container_width=True)
+    if st.session_state['engineered_df'] is not None:
+        k = st.slider("Number of Clusters", 2, 6, 4)
+        if st.button("Run K-Means"):
+            df = st.session_state['engineered_df'].copy()
+            feat = ['Booking Value', 'Ride Distance', 'Driver Ratings']
+            X = StandardScaler().fit_transform(df[feat].fillna(0))
+            
+            clusters = KMeans(n_clusters=k).fit_predict(X)
+            df['Cluster'] = clusters
+            
+            # Radar Chart
+            st.subheader("Cluster Profiles")
+            means = df.groupby('Cluster')[feat].mean()
+            scaler = MinMaxScaler()
+            means_scaled = pd.DataFrame(scaler.fit_transform(means), columns=means.columns)
+            
+            fig_radar = go.Figure()
+            for i in range(k):
+                fig_radar.add_trace(go.Scatterpolar(r=means_scaled.iloc[i], theta=feat, fill='toself', name=f'Cluster {i}'))
+            fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)))
             st.plotly_chart(fig_radar, use_container_width=True)
-            st.markdown("### Segment Profiles")
-            st.dataframe(df_clustered.groupby('Cluster_Label').mean(numeric_only=True).T)
-            csv = df_clustered.to_csv(index=False).encode('utf-8')
-            st.download_button("Download Segmented Data", csv, "segmented_rides.csv", "text/csv")
 
-# --- PAGE 7: FORECASTING ---
-elif page == "7. Time-Series Forecasting":
-    st.title("📈 Demand Forecasting")
+# --- PAGE 9: FORECASTING ---
+elif page == "9. 📈 Demand Forecasting":
+    st.title("📈 Future Demand Forecasting")
     
-    if st.session_state['clean_df'] is None:
-        st.warning("Need clean data with Dates.")
-    else:
+    if st.session_state['clean_df'] is not None:
         df = st.session_state['clean_df'].copy()
-        days_forecast = st.slider("Forecast Horizon (Days)", 7, 90, 30)
+        df['Date'] = pd.to_datetime(df['Date'])
+        daily = df.groupby('Date').size().reset_index(name='y').rename(columns={'Date':'ds'})
+        
+        horizon = st.slider("Forecast Days", 7, 60, 30)
         
         if st.button("Generate Forecast"):
-            with st.spinner("Forecasting with Prophet..."):
-                forecast_fig, components_fig, forecast_df = forecast_demand(df, days_forecast)
-                st.plotly_chart(forecast_fig, use_container_width=True)
-                st.markdown("### Trend & Seasonality")
-                st.plotly_chart(components_fig, use_container_width=True)
-                st.dataframe(forecast_df.tail(10))
+            m = Prophet()
+            m.fit(daily)
+            future = m.make_future_dataframe(periods=horizon)
+            forecast = m.predict(future)
+            
+            st.plotly_chart(plot_plotly(m, forecast), use_container_width=True)
+            st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
