@@ -106,6 +106,7 @@ st.markdown("""
         border-radius: 8px;
         border-left: 5px solid #2196f3;
         margin-bottom: 20px;
+        font-size: 1rem;
     }
     
     /* 9. Tabs Styling */
@@ -137,6 +138,10 @@ st.markdown("""
 # ==========================================
 # 1. UTILITY FUNCTIONS
 # ==========================================
+
+def convert_df(df):
+    """Helper to convert a dataframe to CSV for download buttons."""
+    return df.to_csv(index=False).encode('utf-8')
 
 # --- Preprocessing ---
 def clean_data(df, impute_strat='Median', clip_outliers=True):
@@ -226,7 +231,7 @@ def get_feature_importance(model, feature_names, model_type):
     
     fig = px.bar(df_imp, x='Importance', y='Feature', orientation='h', 
                  title=f'✨ {model_type} Key Drivers', color='Importance', color_continuous_scale='Viridis')
-    return fig
+    return fig, df_imp
 
 # ==========================================
 # 2. MAIN APP LAYOUT
@@ -256,7 +261,12 @@ for key in ['raw_df', 'clean_df', 'engineered_df']:
 # --- PAGE 1: DATA COCKPIT (Enhanced) ---
 if page == "1. 🏠 Data Cockpit":
     st.title("🏠 Data Cockpit & Profiling")
-    st.markdown("Upload your raw data to get a comprehensive 360-degree view.")
+    st.markdown("""
+    <div class='info-box'>
+    <b>Management Summary:</b> This section provides a high-level overview of the raw data before any processing. 
+    Use this to verify data quality and understand the baseline volume and revenue.
+    </div>
+    """, unsafe_allow_html=True)
     
     uploaded_file = st.file_uploader("Upload ncr_ride_bookings.csv", type=["csv"])
     
@@ -284,9 +294,10 @@ if page == "1. 🏠 Data Cockpit":
             st.subheader("Descriptive Statistics")
             st.markdown("""
             <div class='info-box'>
-            <b>💡 Stats Explained:</b><br>
-            - <b>Skewness:</b> Measures asymmetry. >1 means long tail on right (outliers).<br>
-            - <b>Kurtosis:</b> Measures 'tailedness'. High value = heavy outliers.
+            <b>💡 Stats Explained for Stakeholders:</b><br>
+            - <b>Mean vs Median:</b> If Mean > Median, we have high-value outliers driving the average up.<br>
+            - <b>Skewness:</b> Measures asymmetry. Positive value (>1) means a "long tail" of expensive rides.<br>
+            - <b>Kurtosis:</b> Measures 'tailedness'. High value means frequent extreme outliers (risk).
             </div>
             """, unsafe_allow_html=True)
             
@@ -300,7 +311,15 @@ if page == "1. 🏠 Data Cockpit":
             
             st.dataframe(desc.style.background_gradient(cmap='Blues'), use_container_width=True)
             
+            st.download_button(
+                "📥 Download Statistics Report",
+                convert_df(desc.reset_index()),
+                "descriptive_stats.csv",
+                "text/csv"
+            )
+            
         with tab3:
+            st.markdown("<b>Visualizing Data Gaps:</b> Dark red areas indicate missing data that needs fixing in the Preprocessing step.")
             fig_null = px.imshow(df.isnull(), color_continuous_scale='RdBu_r', aspect='auto')
             st.plotly_chart(fig_null, use_container_width=True)
     
@@ -314,7 +333,15 @@ elif page == "2. 🧹 Smart Preprocessing":
     if st.session_state['raw_df'] is None:
         st.warning("⚠️ Please upload data in the Cockpit first.")
     else:
-        st.markdown("<div class='info-box'><b>Why this matters:</b> Real-world data is messy. This pipeline fills missing values using statistical medians and caps extreme outliers (like a ₹100,000 ride) using the IQR method.</div>", unsafe_allow_html=True)
+        st.markdown("""
+        <div class='info-box'>
+        <b>Why this matters:</b> Real-world data is messy. 
+        <ul>
+        <li><b>Imputation:</b> We fill missing revenue/distance with the median value (middle point) to avoid skewing averages.</li>
+        <li><b>Outlier Clipping:</b> We cap extreme values (like a ₹100,000 ride) to prevent them from breaking the AI models.</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
         with col1:
@@ -335,6 +362,13 @@ elif page == "2. 🧹 Smart Preprocessing":
                 with col2:
                     remaining_nulls = df_clean.isnull().sum().sum()
                     st.metric("Remaining Nulls", remaining_nulls, delta="Ideal: 0", delta_color="normal" if remaining_nulls==0 else "inverse")
+                
+                st.download_button(
+                    "📥 Download Cleaned Dataset",
+                    convert_df(df_clean),
+                    "cleaned_data.csv",
+                    "text/csv"
+                )
 
 # --- PAGE 3: VISUAL DEEP DIVE (NEW) ---
 elif page == "3. 🎨 Visual Deep Dive":
@@ -347,7 +381,7 @@ elif page == "3. 🎨 Visual Deep Dive":
         
         # 1. Sunburst
         st.subheader("1. Hierarchical Status Analysis")
-        st.markdown("Drill down into *Booking Status* → *Reasons*. Click on segments to expand.")
+        st.markdown("<b>Business Question:</b> Where are we losing rides? Click on the inner circle (e.g., 'Cancelled') to see the specific reasons why.")
         
         # Prep data for sunburst
         df_sun = df[df['Booking Status'] != 'Completed'].fillna("Unknown")
@@ -365,6 +399,13 @@ elif page == "3. 🎨 Visual Deep Dive":
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
             st.plotly_chart(fig_sun, use_container_width=True)
+            
+            st.download_button(
+                "📥 Download Cancellation Data",
+                convert_df(df_sun),
+                "cancellation_breakdown.csv",
+                "text/csv"
+            )
         else:
             st.info("No cancellations or incomplete rides found to visualize.")
         
@@ -373,7 +414,7 @@ elif page == "3. 🎨 Visual Deep Dive":
         # 2. Violin Plot
         with col1:
             st.subheader("2. Price Distribution by Vehicle")
-            st.markdown("Violin plots show the density of data at different values.")
+            st.markdown("<b>How to read:</b> Wider sections mean more rides occurred at that price point. Long thin lines indicate price variation.")
             fig_vio = px.violin(df, x="Vehicle Type", y="Booking Value", box=True, points="all", color="Vehicle Type")
             fig_vio.update_layout(showlegend=False)
             st.plotly_chart(fig_vio, use_container_width=True)
@@ -381,6 +422,7 @@ elif page == "3. 🎨 Visual Deep Dive":
         # 3. Heatmap
         with col2:
             st.subheader("3. Peak Demand Heatmap")
+            st.markdown("<b>Operational Insight:</b> Yellow/Green areas are high demand. Shift driver incentives to these Day/Hour blocks.")
             if 'Date' in df.columns and 'Time' in df.columns:
                 try:
                     # Ensure DateTime exists
@@ -399,6 +441,13 @@ elif page == "3. 🎨 Visual Deep Dive":
                     
                     fig_heat = px.imshow(heatmap_data, title="Rides by Day & Hour", color_continuous_scale='Viridis')
                     st.plotly_chart(fig_heat, use_container_width=True)
+                    
+                    st.download_button(
+                        "📥 Download Demand Matrix",
+                        convert_df(heatmap_data.reset_index()),
+                        "demand_heatmap.csv",
+                        "text/csv"
+                    )
                 except Exception as e:
                     st.error(f"Could not generate heatmap: {e}")
 
@@ -409,17 +458,34 @@ elif page == "4. ⚙️ Feature Lab":
     if st.session_state['clean_df'] is None:
         st.warning("⚠️ Clean data required.")
     else:
-        st.info("Transforms raw timestamps into cyclical features (sin_hour, cos_hour) and uses K-Means to cluster location names into zones.")
+        st.markdown("""
+        <div class='info-box'>
+        <b>Technical Translation:</b> AI models can't understand "Monday" or "Connaught Place". 
+        We convert these into numbers:
+        <ul>
+        <li><b>Time Features:</b> We use Sine/Cosine math to teach the model that 23:00 is close to 00:00 (Cyclical).</li>
+        <li><b>Clustering:</b> We group hundreds of pickup locations into 5 distinct "Zones" based on similarity.</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
         
         if st.button("⚡ Generate Advanced Features"):
             df_eng = engineer_features(st.session_state['clean_df'].copy())
             st.session_state['engineered_df'] = df_eng
             st.success("Features Generated!")
             st.write(df_eng[['DateTime', 'sin_hour', 'pickup_cluster', 'is_weekend']].head())
+            
+            st.download_button(
+                "📥 Download AI-Ready Dataset",
+                convert_df(df_eng),
+                "engineered_data.csv",
+                "text/csv"
+            )
 
 # --- PAGE 5: ML CLASSIFICATION ---
 elif page == "5. 🤖 Predictive ML (Classif.)":
     st.title("🤖 Cancellation Prediction AI")
+    st.markdown("Train an AI to predict if a booking will be cancelled *before* it happens.")
     
     if st.session_state['engineered_df'] is None:
         st.error("⚠️ Please run Feature Engineering first.")
@@ -450,21 +516,30 @@ elif page == "5. 🤖 Predictive ML (Classif.)":
             y_prob = model.predict_proba(X_test)[:,1]
             
             # Metrics
+            st.subheader("Model Performance")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("ROC-AUC", f"{roc_auc_score(y_test, y_prob):.3f}", help="Area Under Curve. 1.0 is perfect, 0.5 is random.")
-            c2.metric("Precision", f"{precision_score(y_test, y_pred, zero_division=0):.3f}", help="% of predicted cancellations that were actual cancellations.")
-            c3.metric("Recall", f"{recall_score(y_test, y_pred, zero_division=0):.3f}", help="% of actual cancellations detected.")
-            c4.metric("F1 Score", f"{f1_score(y_test, y_pred, zero_division=0):.3f}")
+            c1.metric("ROC-AUC", f"{roc_auc_score(y_test, y_prob):.3f}", help="Overall Model Ability (1.0 is perfect). Above 0.7 is good.")
+            c2.metric("Precision", f"{precision_score(y_test, y_pred, zero_division=0):.3f}", help="When AI says 'Cancel', how often is it right? (Avoids False Alarms)")
+            c3.metric("Recall", f"{recall_score(y_test, y_pred, zero_division=0):.3f}", help="What % of actual cancellations did we catch?")
+            c4.metric("F1 Score", f"{f1_score(y_test, y_pred, zero_division=0):.3f}", help="Balance between Precision and Recall.")
             
-            st.plotly_chart(get_feature_importance(model, available_feats, model_name), use_container_width=True)
+            fig_imp, df_imp = get_feature_importance(model, available_feats, model_name)
+            st.plotly_chart(fig_imp, use_container_width=True)
+            
+            st.download_button(
+                "📥 Download Feature Importance",
+                convert_df(df_imp),
+                "key_drivers.csv",
+                "text/csv"
+            )
 
 # --- PAGE 6: ML REGRESSION ---
 elif page == "6. 💰 Revenue AI (Regress.)":
     st.title("💰 Fare/Revenue Prediction AI")
     st.markdown("""
     <div class='info-box'>
-    <b>What is this?</b> This module predicts the <b>Revenue (Booking Value)</b> for a ride based on distance, time, and location.
-    It helps management simulate pricing and forecast financial performance.
+    <b>Management Summary:</b> This module helps simulate pricing strategies. 
+    It predicts the expected fare for any given ride characteristics (Distance, Time, Location).
     </div>
     """, unsafe_allow_html=True)
     
@@ -505,8 +580,8 @@ elif page == "6. 💰 Revenue AI (Regress.)":
                 rmse = np.sqrt(mean_squared_error(y_test, y_pred))
                 r2 = r2_score(y_test, y_pred)
                 
-                m1.metric("RMSE (Avg Error)", f"₹{rmse:.2f}", help="On average, the model's price prediction is off by this amount.")
-                m2.metric("R² Accuracy", f"{r2:.1%}", help="How much of the price variation is explained by the model. 100% is perfect.")
+                m1.metric("RMSE (Avg Error)", f"₹{rmse:.2f}", help="On average, our price prediction deviates by this amount.")
+                m2.metric("R² Accuracy", f"{r2:.1%}", help="How well the model captures price variations. Closer to 100% is better.")
                 m3.metric("Test Samples", len(y_test))
                 
                 st.markdown("---")
@@ -523,9 +598,18 @@ elif page == "6. 💰 Revenue AI (Regress.)":
                                            x0=y.min(), y0=y.max(), x1=y.min(), y1=y.max())
                     st.plotly_chart(fig_act_pred, use_container_width=True)
                     
+                    # Prepare export data
+                    comparison_df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
+                    st.download_button(
+                        "📥 Download Prediction Data",
+                        convert_df(comparison_df),
+                        "actual_vs_predicted.csv",
+                        "text/csv"
+                    )
+                    
                 with c2:
                     st.subheader("2. Residual Distribution")
-                    st.caption("Are errors random? (Bell curve is good)")
+                    st.caption("Are errors random? (Bell curve is good. Skew means systematic bias.)")
                     residuals = y_test - y_pred
                     fig_res_hist = px.histogram(residuals, nbins=50, title="Error Distribution", labels={'value': 'Error (₹)'})
                     st.plotly_chart(fig_res_hist, use_container_width=True)
@@ -544,7 +628,7 @@ elif page == "6. 💰 Revenue AI (Regress.)":
                 f_col1, f_col2 = st.columns([1, 2])
                 with f_col1:
                     forecast_days = st.slider("Select Forecast Horizon (Days)", 7, 90, 30, help="How far into the future to predict revenue?")
-                    confidence_interval = st.slider("Confidence Interval", 0.8, 0.99, 0.95)
+                    confidence_interval = st.slider("Confidence Interval", 0.8, 0.99, 0.95, help="Wider interval = More conservative/safer range.")
                 
                 if st.button("Generate Revenue Forecast"):
                     with st.spinner("Forecasting future revenue streams..."):
@@ -582,8 +666,8 @@ elif page == "7. 🕵️ Anomaly Detection (New)":
     st.title("🕵️ Anomaly & Fraud Detection")
     st.markdown("""
     <div class='info-box'>
-    Uses <b>Isolation Forest</b> to detect 'strange' rides. 
-    Examples: High price for short distance, weird times, or unusual locations.
+    <b>Management Use Case:</b> Detect suspicious activities such as fraudulent rides, GPS errors, or pricing glitches.
+    - <b>Isolation Forest Algorithm:</b> Identifies rides that are mathematically "distant" from the norm.
     </div>
     """, unsafe_allow_html=True)
     
@@ -614,6 +698,13 @@ elif page == "7. 🕵️ Anomaly Detection (New)":
                 
                 st.subheader("Inspect Suspicious Rides")
                 st.dataframe(anomalies[numeric_cols + ['Booking Status']].head(20))
+                
+                st.download_button(
+                    "📥 Download Anomalies Report",
+                    convert_df(anomalies),
+                    "suspicious_rides.csv",
+                    "text/csv"
+                )
         else:
             st.error("Required columns for anomaly detection not found.")
 
@@ -622,8 +713,8 @@ elif page == "8. 🎯 Customer Segmentation":
     st.title("🎯 Customer/Ride Segmentation")
     st.markdown("""
     <div class='info-box'>
-    <b>Smart Segmentation:</b> This module uses Unsupervised Learning (K-Means) to group similar rides.
-    It automatically labels groups based on their spending and travel habits.
+    <b>Smart Segmentation:</b> We group rides into distinct "Personas".
+    Use these personas to tailor marketing campaigns (e.g., discounts for "Budget Commuters", loyalty perks for "Premium Long-Haul").
     </div>
     """, unsafe_allow_html=True)
     
@@ -669,6 +760,7 @@ elif page == "8. 🎯 Customer Segmentation":
             
             # --- VISUALIZATION GRID ---
             st.subheader("1. Segment Profiles (Radar Chart)")
+            st.markdown("Comparing relative strengths of each persona (Scale: 0-1 normalized).")
             
             # Normalize for Radar
             mm_scaler = MinMaxScaler()
@@ -704,6 +796,13 @@ elif page == "8. 🎯 Customer Segmentation":
             counts.columns = ['Persona', 'Count']
             counts['Percentage'] = (counts['Count'] / len(df) * 100).round(1).astype(str) + '%'
             st.dataframe(counts)
+            
+            st.download_button(
+                "📥 Download Segmented Customers",
+                convert_df(df[['Booking ID', 'Persona', 'Booking Value', 'Ride Distance']]),
+                "customer_segments.csv",
+                "text/csv"
+            )
 
 # --- PAGE 9: FORECASTING ---
 elif page == "9. 📈 Demand Forecasting":
@@ -726,4 +825,14 @@ elif page == "9. 📈 Demand Forecasting":
                 forecast = m.predict(future)
                 
                 st.plotly_chart(plot_plotly(m, forecast), use_container_width=True)
-                st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
+                
+                export_forecast = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(horizon)
+                export_forecast.columns = ['Date', 'Predicted Demand', 'Lower CI', 'Upper CI']
+                st.write(export_forecast)
+                
+                st.download_button(
+                    "📥 Download Demand Forecast",
+                    convert_df(export_forecast),
+                    "demand_forecast.csv",
+                    "text/csv"
+                )
