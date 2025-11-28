@@ -460,42 +460,122 @@ elif page == "5. 🤖 Predictive ML (Classif.)":
 
 # --- PAGE 6: ML REGRESSION ---
 elif page == "6. 💰 Revenue AI (Regress.)":
-    st.title("💰 Fare/Revenue Prediction")
-    st.markdown("Predict the `Booking Value` for completed rides.")
+    st.title("💰 Fare/Revenue Prediction AI")
+    st.markdown("""
+    <div class='info-box'>
+    <b>What is this?</b> This module predicts the <b>Revenue (Booking Value)</b> for a ride based on distance, time, and location.
+    It helps management simulate pricing and forecast financial performance.
+    </div>
+    """, unsafe_allow_html=True)
     
     if st.session_state['engineered_df'] is not None:
         df = st.session_state['engineered_df'].copy()
         df = df[df['Booking Status'] == 'Completed']
         
-        features = ['Ride Distance', 'hour', 'pickup_cluster', 'drop_cluster']
-        available_feats = [f for f in features if f in df.columns]
+        # Tabs for better organization
+        tab1, tab2 = st.tabs(["📊 Pricing Model Training", "🔮 Future Revenue Forecast"])
         
-        X = df[available_feats].fillna(0)
-        y = df['Booking Value']
-        
-        model_name = st.selectbox("Regressor", ["Gradient Boosting", "Random Forest", "CatBoost"])
-        
-        if st.button("Train Regressor"):
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+        # --- TAB 1: MODEL TRAINING ---
+        with tab1:
+            features = ['Ride Distance', 'hour', 'pickup_cluster', 'drop_cluster']
+            available_feats = [f for f in features if f in df.columns]
             
-            if "Gradient" in model_name: model = GradientBoostingRegressor()
-            elif "Random" in model_name: model = RandomForestRegressor()
-            else: model = CatBoostRegressor(verbose=0)
-            
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
+            X = df[available_feats].fillna(0)
+            y = df['Booking Value']
             
             col1, col2 = st.columns(2)
-            col1.metric("RMSE", f"₹{np.sqrt(mean_squared_error(y_test, y_pred)):.2f}", help="Root Mean Squared Error. Typical prediction error in Rupees.")
-            col2.metric("R² Score", f"{r2_score(y_test, y_pred):.3f}", help="Variance explained by the model (Max 1.0).")
+            with col1:
+                model_name = st.selectbox("Regressor Algorithm", ["Gradient Boosting (Recommended)", "Random Forest", "CatBoost"])
+            with col2:
+                split_size = st.slider("Train/Test Split", 0.1, 0.4, 0.2)
             
-            # Residual Plot
-            st.subheader("Residual Analysis")
-            st.markdown("Ideal residuals should be randomly scattered around 0.")
-            residuals = y_test - y_pred
-            fig_res = px.scatter(x=y_pred, y=residuals, labels={'x': 'Predicted Value', 'y': 'Residuals (Error)'}, title="Residual Plot")
-            fig_res.add_hline(y=0, line_dash="dash", line_color="red")
-            st.plotly_chart(fig_res, use_container_width=True)
+            if st.button("🚀 Train Pricing Model"):
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=split_size, random_state=42)
+                
+                if "Gradient" in model_name: model = GradientBoostingRegressor(random_state=42)
+                elif "Random" in model_name: model = RandomForestRegressor(random_state=42)
+                else: model = CatBoostRegressor(verbose=0, random_state=42)
+                
+                with st.spinner("Training model on historical rides..."):
+                    model.fit(X_train, y_train)
+                    y_pred = model.predict(X_test)
+                
+                # Metrics Row
+                m1, m2, m3 = st.columns(3)
+                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+                r2 = r2_score(y_test, y_pred)
+                
+                m1.metric("RMSE (Avg Error)", f"₹{rmse:.2f}", help="On average, the model's price prediction is off by this amount.")
+                m2.metric("R² Accuracy", f"{r2:.1%}", help="How much of the price variation is explained by the model. 100% is perfect.")
+                m3.metric("Test Samples", len(y_test))
+                
+                st.markdown("---")
+                
+                # Enhanced Charts
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    st.subheader("1. Actual vs Predicted Price")
+                    st.caption("Perfect predictions would land on the red diagonal line.")
+                    fig_act_pred = px.scatter(x=y_test, y=y_pred, labels={'x': 'Actual Price', 'y': 'Predicted Price'}, 
+                                              opacity=0.6, title="Prediction Accuracy Check")
+                    fig_act_pred.add_shape(type="line", line=dict(dash='dash', color='red'),
+                                           x0=y.min(), y0=y.max(), x1=y.min(), y1=y.max())
+                    st.plotly_chart(fig_act_pred, use_container_width=True)
+                    
+                with c2:
+                    st.subheader("2. Residual Distribution")
+                    st.caption("Are errors random? (Bell curve is good)")
+                    residuals = y_test - y_pred
+                    fig_res_hist = px.histogram(residuals, nbins=50, title="Error Distribution", labels={'value': 'Error (₹)'})
+                    st.plotly_chart(fig_res_hist, use_container_width=True)
+
+        # --- TAB 2: REVENUE FORECAST (NEW) ---
+        with tab2:
+            st.subheader("🔮 Management Revenue Forecast")
+            st.markdown("Project total revenue for the upcoming period based on historical trends.")
+            
+            # Prepare daily revenue data
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'])
+                daily_rev = df.groupby('Date')['Booking Value'].sum().reset_index()
+                daily_rev.columns = ['ds', 'y'] # Prophet format
+                
+                f_col1, f_col2 = st.columns([1, 2])
+                with f_col1:
+                    forecast_days = st.slider("Select Forecast Horizon (Days)", 7, 90, 30, help="How far into the future to predict revenue?")
+                    confidence_interval = st.slider("Confidence Interval", 0.8, 0.99, 0.95)
+                
+                if st.button("Generate Revenue Forecast"):
+                    with st.spinner("Forecasting future revenue streams..."):
+                        m = Prophet(interval_width=confidence_interval)
+                        m.fit(daily_rev)
+                        future = m.make_future_dataframe(periods=forecast_days)
+                        forecast = m.predict(future)
+                        
+                        # Plot
+                        fig_forecast = plot_plotly(m, forecast)
+                        fig_forecast.update_layout(title=f"Total Revenue Forecast - Next {forecast_days} Days", 
+                                                 yaxis_title="Daily Revenue (₹)", xaxis_title="Date")
+                        st.plotly_chart(fig_forecast, use_container_width=True)
+                        
+                        # Data Table & Download
+                        st.subheader("📥 Export Forecast Data")
+                        forecast_clean = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(forecast_days)
+                        forecast_clean.columns = ['Date', 'Predicted Revenue', 'Lower Bound', 'Upper Bound']
+                        
+                        st.dataframe(forecast_clean.head())
+                        
+                        csv = forecast_clean.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            "Download Forecast Report (.csv for Excel)",
+                            csv,
+                            "revenue_forecast_report.csv",
+                            "text/csv",
+                            key='download-csv'
+                        )
+            else:
+                st.error("Date column missing for forecasting.")
 
 # --- PAGE 7: ANOMALY DETECTION (NEW) ---
 elif page == "7. 🕵️ Anomaly Detection (New)":
@@ -540,31 +620,90 @@ elif page == "7. 🕵️ Anomaly Detection (New)":
 # --- PAGE 8: CLUSTERING ---
 elif page == "8. 🎯 Customer Segmentation":
     st.title("🎯 Customer/Ride Segmentation")
-    st.info("Groups rides into 'personas' based on behavior.")
+    st.markdown("""
+    <div class='info-box'>
+    <b>Smart Segmentation:</b> This module uses Unsupervised Learning (K-Means) to group similar rides.
+    It automatically labels groups based on their spending and travel habits.
+    </div>
+    """, unsafe_allow_html=True)
     
     if st.session_state['engineered_df'] is not None:
-        k = st.slider("Number of Clusters", 2, 6, 4)
-        if st.button("Run K-Means"):
-            df = st.session_state['engineered_df'].copy()
+        df = st.session_state['engineered_df'].copy()
+        k = st.slider("Number of Segments", 2, 6, 4)
+        
+        if st.button("Run Advanced Segmentation"):
             feat = ['Booking Value', 'Ride Distance', 'Driver Ratings']
             available_feats = [f for f in feat if f in df.columns]
             
-            X = StandardScaler().fit_transform(df[available_feats].fillna(0))
+            # Scale Data
+            scaler = StandardScaler()
+            X = scaler.fit_transform(df[available_feats].fillna(0))
             
-            clusters = KMeans(n_clusters=k).fit_predict(X)
-            df['Cluster'] = clusters
+            # Fit Model
+            kmeans = KMeans(n_clusters=k, random_state=42)
+            df['Cluster'] = kmeans.fit_predict(X)
             
-            # Radar Chart
-            st.subheader("Cluster Profiles")
-            means = df.groupby('Cluster')[available_feats].mean()
-            scaler = MinMaxScaler()
-            means_scaled = pd.DataFrame(scaler.fit_transform(means), columns=means.columns)
+            # --- INTELLIGENT PERSONA NAMING ---
+            cluster_summary = df.groupby('Cluster')[available_feats].mean()
+            
+            def get_persona_name(row):
+                # Simple logic to auto-name clusters
+                val = row['Booking Value']
+                dist = row['Ride Distance']
+                avg_val = cluster_summary['Booking Value'].mean()
+                avg_dist = cluster_summary['Ride Distance'].mean()
+                
+                if val > avg_val * 1.2 and dist > avg_dist * 1.2: return "💎 Premium Long-Haul"
+                if val > avg_val * 1.2 and dist < avg_dist: return "⚡ High-Value Short"
+                if val < avg_val and dist > avg_dist: return "📉 Budget Long-Distance"
+                if val < avg_val and dist < avg_dist: return "🛵 Budget Commuter"
+                return "📍 Standard Rider"
+
+            cluster_summary['Persona'] = cluster_summary.apply(get_persona_name, axis=1)
+            
+            # Merge Persona back to main df
+            persona_map = cluster_summary['Persona'].to_dict()
+            df['Persona'] = df['Cluster'].map(persona_map)
+            
+            st.success("Segmentation Complete! Personas Identified.")
+            
+            # --- VISUALIZATION GRID ---
+            st.subheader("1. Segment Profiles (Radar Chart)")
+            
+            # Normalize for Radar
+            mm_scaler = MinMaxScaler()
+            radar_data = pd.DataFrame(mm_scaler.fit_transform(cluster_summary[available_feats]), 
+                                     columns=available_feats, index=cluster_summary.index)
+            radar_data['Persona'] = cluster_summary['Persona']
             
             fig_radar = go.Figure()
             for i in range(k):
-                fig_radar.add_trace(go.Scatterpolar(r=means_scaled.iloc[i], theta=available_feats, fill='toself', name=f'Cluster {i}'))
-            fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)))
+                persona_name = radar_data.iloc[i]['Persona']
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=radar_data.iloc[i][available_feats],
+                    theta=available_feats,
+                    fill='toself',
+                    name=f'{persona_name}'
+                ))
+            fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)), title="Persona Fingerprints")
             st.plotly_chart(fig_radar, use_container_width=True)
+            
+            # --- BOX PLOTS ---
+            st.subheader("2. Deep Dive: Attribute Distribution")
+            col1, col2 = st.columns(2)
+            with col1:
+                fig_box1 = px.box(df, x="Persona", y="Booking Value", color="Persona", title="Spending Power by Persona")
+                st.plotly_chart(fig_box1, use_container_width=True)
+            with col2:
+                fig_box2 = px.box(df, x="Persona", y="Ride Distance", color="Persona", title="Travel Distance by Persona")
+                st.plotly_chart(fig_box2, use_container_width=True)
+                
+            # --- SUMMARY TABLE ---
+            st.subheader("3. Segment Size & Value")
+            counts = df['Persona'].value_counts().reset_index()
+            counts.columns = ['Persona', 'Count']
+            counts['Percentage'] = (counts['Count'] / len(df) * 100).round(1).astype(str) + '%'
+            st.dataframe(counts)
 
 # --- PAGE 9: FORECASTING ---
 elif page == "9. 📈 Demand Forecasting":
