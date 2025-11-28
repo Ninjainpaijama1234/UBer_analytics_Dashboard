@@ -7,7 +7,9 @@ import plotly.figure_factory as ff
 import warnings
 
 # ML & Stats Libraries
-from sklearn.cluster import KMeans, IsolationForest
+# --- FIXED IMPORTS BELOW ---
+from sklearn.cluster import KMeans
+from sklearn.ensemble import IsolationForest 
 from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
@@ -79,6 +81,7 @@ st.markdown("""
 def clean_data(df, impute_strat='Median', clip_outliers=True):
     """Performs comprehensive cleaning."""
     try:
+        # Combine Date and Time
         df['DateTime'] = pd.to_datetime(df['Date'].astype(str) + ' ' + df['Time'].astype(str), errors='coerce')
         df = df.sort_values('DateTime')
     except Exception:
@@ -138,6 +141,11 @@ def engineer_features(df, loc_clusters=5):
         loc_numeric = le.fit_transform(df_eng['Pickup Location'].astype(str)).reshape(-1, 1)
         kmeans = KMeans(n_clusters=loc_clusters, random_state=42, n_init=10)
         df_eng['pickup_cluster'] = kmeans.fit_predict(loc_numeric)
+    
+    if 'Drop Location' in df_eng.columns:
+        loc_numeric_drop = le.fit_transform(df_eng['Drop Location'].astype(str)).reshape(-1, 1)
+        kmeans_drop = KMeans(n_clusters=loc_clusters, random_state=42, n_init=10)
+        df_eng['drop_cluster'] = kmeans_drop.fit_predict(loc_numeric_drop)
     
     # Interaction Feature: Value per km
     if 'Booking Value' in df_eng.columns and 'Ride Distance' in df_eng.columns:
@@ -221,16 +229,22 @@ if page == "1. 🏠 Data Cockpit":
             </div>
             """, unsafe_allow_html=True)
             
-            desc = df.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95, 0.99]).T
-            # Calculate Skew/Kurt only for numeric
+            # Select only numeric columns for describe
             numeric_df = df.select_dtypes(include=np.number)
+            desc = numeric_df.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95, 0.99]).T
+            
+            # Calculate Skew/Kurt only for numeric
             desc['skew'] = numeric_df.skew()
             desc['kurtosis'] = numeric_df.kurt()
+            
             st.dataframe(desc.style.background_gradient(cmap='Blues'), use_container_width=True)
             
         with tab3:
             fig_null = px.imshow(df.isnull(), color_continuous_scale='RdBu_r', aspect='auto')
             st.plotly_chart(fig_null, use_container_width=True)
+    
+    elif st.session_state['raw_df'] is not None:
+         st.info("Using cached data. Go to other tabs to analyze.")
 
 # --- PAGE 2: PREPROCESSING ---
 elif page == "2. 🧹 Smart Preprocessing":
@@ -282,12 +296,16 @@ elif page == "3. 🎨 Visual Deep Dive":
         df_sun['Combined_Reason'] = df_sun['Combined_Reason'].str.replace("UnknownUnknown", "").str.replace("Unknown", "")
         df_sun.loc[df_sun['Combined_Reason'] == "", 'Combined_Reason'] = "Unspecified"
         
-        fig_sun = px.sunburst(
-            df_sun, path=['Booking Status', 'Combined_Reason'], 
-            title="Lost Demand Breakdown (Interactive)",
-            color_discrete_sequence=px.colors.qualitative.Pastel
-        )
-        st.plotly_chart(fig_sun, use_container_width=True)
+        # Handle case where filtered df might be empty
+        if not df_sun.empty:
+            fig_sun = px.sunburst(
+                df_sun, path=['Booking Status', 'Combined_Reason'], 
+                title="Lost Demand Breakdown (Interactive)",
+                color_discrete_sequence=px.colors.qualitative.Pastel
+            )
+            st.plotly_chart(fig_sun, use_container_width=True)
+        else:
+            st.info("No cancellations or incomplete rides found to visualize.")
         
         col1, col2 = st.columns(2)
         
@@ -303,17 +321,25 @@ elif page == "3. 🎨 Visual Deep Dive":
         with col2:
             st.subheader("3. Peak Demand Heatmap")
             if 'Date' in df.columns and 'Time' in df.columns:
-                df['Temp_DT'] = pd.to_datetime(df['Date'].astype(str) + ' ' + df['Time'].astype(str))
-                df['Day'] = df['Temp_DT'].dt.day_name()
-                df['Hour'] = df['Temp_DT'].dt.hour
-                
-                heatmap_data = df.groupby(['Day', 'Hour']).size().unstack(fill_value=0)
-                # Reorder days
-                days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-                heatmap_data = heatmap_data.reindex(days_order)
-                
-                fig_heat = px.imshow(heatmap_data, title="Rides by Day & Hour", color_continuous_scale='Viridis')
-                st.plotly_chart(fig_heat, use_container_width=True)
+                try:
+                    # Ensure DateTime exists
+                    if 'DateTime' not in df.columns:
+                         df['DateTime'] = pd.to_datetime(df['Date'].astype(str) + ' ' + df['Time'].astype(str), errors='coerce')
+                    
+                    df['Day'] = df['DateTime'].dt.day_name()
+                    df['Hour'] = df['DateTime'].dt.hour
+                    
+                    heatmap_data = df.groupby(['Day', 'Hour']).size().unstack(fill_value=0)
+                    # Reorder days
+                    days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                    # Only reindex if the days exist in the data
+                    existing_days = [d for d in days_order if d in heatmap_data.index]
+                    heatmap_data = heatmap_data.reindex(existing_days)
+                    
+                    fig_heat = px.imshow(heatmap_data, title="Rides by Day & Hour", color_continuous_scale='Viridis')
+                    st.plotly_chart(fig_heat, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Could not generate heatmap: {e}")
 
 # --- PAGE 4: FEATURE ENGINEERING ---
 elif page == "4. ⚙️ Feature Lab":
@@ -338,11 +364,15 @@ elif page == "5. 🤖 Predictive ML (Classif.)":
         st.error("⚠️ Please run Feature Engineering first.")
     else:
         df = st.session_state['engineered_df'].copy()
+        # Ensure we have a target
         df['Target'] = df['Booking Status'].apply(lambda x: 1 if 'Cancel' in str(x) else 0)
         
         # Feature Selection
         features = ['Booking Value', 'Ride Distance', 'hour', 'is_weekend', 'sin_hour', 'pickup_cluster']
-        X = df[features].fillna(0)
+        # Check if cols exist
+        available_feats = [f for f in features if f in df.columns]
+        
+        X = df[available_feats].fillna(0)
         y = df['Target']
         
         model_name = st.selectbox("Choose Model Architecture", ["Gradient Boosting (Best)", "Random Forest", "XGBoost"])
@@ -361,11 +391,11 @@ elif page == "5. 🤖 Predictive ML (Classif.)":
             # Metrics
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("ROC-AUC", f"{roc_auc_score(y_test, y_prob):.3f}", help="Area Under Curve. 1.0 is perfect, 0.5 is random.")
-            c2.metric("Precision", f"{precision_score(y_test, y_pred):.3f}", help="% of predicted cancellations that were actual cancellations.")
-            c3.metric("Recall", f"{recall_score(y_test, y_pred):.3f}", help="% of actual cancellations detected.")
-            c4.metric("F1 Score", f"{f1_score(y_test, y_pred):.3f}")
+            c2.metric("Precision", f"{precision_score(y_test, y_pred, zero_division=0):.3f}", help="% of predicted cancellations that were actual cancellations.")
+            c3.metric("Recall", f"{recall_score(y_test, y_pred, zero_division=0):.3f}", help="% of actual cancellations detected.")
+            c4.metric("F1 Score", f"{f1_score(y_test, y_pred, zero_division=0):.3f}")
             
-            st.plotly_chart(get_feature_importance(model, features, model_name), use_container_width=True)
+            st.plotly_chart(get_feature_importance(model, available_feats, model_name), use_container_width=True)
 
 # --- PAGE 6: ML REGRESSION ---
 elif page == "6. 💰 Revenue AI (Regress.)":
@@ -377,7 +407,9 @@ elif page == "6. 💰 Revenue AI (Regress.)":
         df = df[df['Booking Status'] == 'Completed']
         
         features = ['Ride Distance', 'hour', 'pickup_cluster', 'drop_cluster']
-        X = df[features].fillna(0)
+        available_feats = [f for f in features if f in df.columns]
+        
+        X = df[available_feats].fillna(0)
         y = df['Booking Value']
         
         model_name = st.selectbox("Regressor", ["Gradient Boosting", "Random Forest", "CatBoost"])
@@ -417,26 +449,32 @@ elif page == "7. 🕵️ Anomaly Detection (New)":
     if st.session_state['engineered_df'] is not None:
         df = st.session_state['engineered_df'].copy()
         cols = ['Booking Value', 'Ride Distance', 'Avg VTAT']
-        X = df[cols].fillna(df[cols].median())
+        # Filter numeric only
+        numeric_cols = [c for c in cols if c in df.columns]
         
-        contamination = st.slider("Contamination (Expected % of outliers)", 0.01, 0.1, 0.02)
-        
-        if st.button("🔍 Scan for Anomalies"):
-            iso = IsolationForest(contamination=contamination, random_state=42)
-            df['anomaly'] = iso.fit_predict(X)
-            # -1 is anomaly, 1 is normal
-            anomalies = df[df['anomaly'] == -1]
+        if numeric_cols:
+            X = df[numeric_cols].fillna(df[numeric_cols].median())
             
-            st.error(f"⚠️ Found {len(anomalies)} anomalies out of {len(df)} rides!")
+            contamination = st.slider("Contamination (Expected % of outliers)", 0.01, 0.1, 0.02)
             
-            st.subheader("Anomaly Visualization")
-            fig_anom = px.scatter(df, x="Ride Distance", y="Booking Value", color=df['anomaly'].astype(str),
-                                  color_discrete_map={'-1':'red', '1':'blue'},
-                                  title="Red points are anomalies")
-            st.plotly_chart(fig_anom, use_container_width=True)
-            
-            st.subheader("Inspect Suspicious Rides")
-            st.dataframe(anomalies[cols + ['Booking Status', 'DateTime']].head(20))
+            if st.button("🔍 Scan for Anomalies"):
+                iso = IsolationForest(contamination=contamination, random_state=42)
+                df['anomaly'] = iso.fit_predict(X)
+                # -1 is anomaly, 1 is normal
+                anomalies = df[df['anomaly'] == -1]
+                
+                st.error(f"⚠️ Found {len(anomalies)} anomalies out of {len(df)} rides!")
+                
+                st.subheader("Anomaly Visualization")
+                fig_anom = px.scatter(df, x="Ride Distance", y="Booking Value", color=df['anomaly'].astype(str),
+                                      color_discrete_map={'-1':'red', '1':'blue'},
+                                      title="Red points are anomalies")
+                st.plotly_chart(fig_anom, use_container_width=True)
+                
+                st.subheader("Inspect Suspicious Rides")
+                st.dataframe(anomalies[numeric_cols + ['Booking Status']].head(20))
+        else:
+            st.error("Required columns for anomaly detection not found.")
 
 # --- PAGE 8: CLUSTERING ---
 elif page == "8. 🎯 Customer Segmentation":
@@ -448,20 +486,22 @@ elif page == "8. 🎯 Customer Segmentation":
         if st.button("Run K-Means"):
             df = st.session_state['engineered_df'].copy()
             feat = ['Booking Value', 'Ride Distance', 'Driver Ratings']
-            X = StandardScaler().fit_transform(df[feat].fillna(0))
+            available_feats = [f for f in feat if f in df.columns]
+            
+            X = StandardScaler().fit_transform(df[available_feats].fillna(0))
             
             clusters = KMeans(n_clusters=k).fit_predict(X)
             df['Cluster'] = clusters
             
             # Radar Chart
             st.subheader("Cluster Profiles")
-            means = df.groupby('Cluster')[feat].mean()
+            means = df.groupby('Cluster')[available_feats].mean()
             scaler = MinMaxScaler()
             means_scaled = pd.DataFrame(scaler.fit_transform(means), columns=means.columns)
             
             fig_radar = go.Figure()
             for i in range(k):
-                fig_radar.add_trace(go.Scatterpolar(r=means_scaled.iloc[i], theta=feat, fill='toself', name=f'Cluster {i}'))
+                fig_radar.add_trace(go.Scatterpolar(r=means_scaled.iloc[i], theta=available_feats, fill='toself', name=f'Cluster {i}'))
             fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)))
             st.plotly_chart(fig_radar, use_container_width=True)
 
@@ -471,16 +511,19 @@ elif page == "9. 📈 Demand Forecasting":
     
     if st.session_state['clean_df'] is not None:
         df = st.session_state['clean_df'].copy()
-        df['Date'] = pd.to_datetime(df['Date'])
-        daily = df.groupby('Date').size().reset_index(name='y').rename(columns={'Date':'ds'})
         
-        horizon = st.slider("Forecast Days", 7, 60, 30)
-        
-        if st.button("Generate Forecast"):
-            m = Prophet()
-            m.fit(daily)
-            future = m.make_future_dataframe(periods=horizon)
-            forecast = m.predict(future)
+        # Ensure Date is datetime
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+            daily = df.groupby('Date').size().reset_index(name='y').rename(columns={'Date':'ds'})
             
-            st.plotly_chart(plot_plotly(m, forecast), use_container_width=True)
-            st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
+            horizon = st.slider("Forecast Days", 7, 60, 30)
+            
+            if st.button("Generate Forecast"):
+                m = Prophet()
+                m.fit(daily)
+                future = m.make_future_dataframe(periods=horizon)
+                forecast = m.predict(future)
+                
+                st.plotly_chart(plot_plotly(m, forecast), use_container_width=True)
+                st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
