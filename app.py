@@ -41,75 +41,95 @@ st.set_page_config(
 # Custom CSS for High Contrast & Visibility
 st.markdown("""
 <style>
-    /* 1. Main App Background & Text */
-    .stApp {
-        background-color: #f0f2f6; /* Light gray-blue background */
-        color: #000000; /* Enforce black text globally */
-    }
-    
-    /* 2. Headers - Force Black */
-    h1, h2, h3, h4, h5, h6 {
-        color: #111111 !important;
+    /* 1. Global Reset - Force Light Mode */
+    html, body, [class*="css"] {
+        background-color: #ffffff !important;
+        color: #000000 !important;
         font-family: 'Segoe UI', sans-serif;
-        font-weight: 600;
     }
     
-    /* 3. Metric Cards - High Contrast */
+    /* 2. Main App Background */
+    .stApp {
+        background-color: #ffffff !important;
+    }
+
+    /* 3. Text Visibility - Force Black */
+    p, span, div, li, label, .stMarkdown {
+        color: #000000 !important;
+    }
+    
+    /* 4. Headers - Bold Black */
+    h1, h2, h3, h4, h5, h6 {
+        color: #000000 !important;
+        font-weight: 700 !important;
+    }
+    
+    /* 5. Metric Cards - distinct borders */
     div[data-testid="stMetric"] {
-        background-color: #ffffff; /* Pure white background */
-        border: 1px solid #d1d5db; /* Visible grey border */
+        background-color: #f8f9fa !important;
+        border: 1px solid #ced4da !important;
         padding: 15px;
         border-radius: 8px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        color: #000000; /* Black text */
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
     }
-    
-    /* Metric Label (Small top text) */
     div[data-testid="stMetricLabel"] {
-        color: #374151 !important; /* Dark Gray */
-        font-size: 1rem;
-        font-weight: 600;
+        color: #333333 !important; /* Dark Gray for label */
+        font-weight: bold !important;
     }
-    
-    /* Metric Value (Big number) */
     div[data-testid="stMetricValue"] {
-        color: #000000 !important; /* Pure Black */
-        font-weight: 700;
+        color: #000000 !important; /* Pure Black for value */
     }
     
-    /* 4. Sidebar Styling */
+    /* 6. Sidebar - Light Gray Background, Black Text */
     section[data-testid="stSidebar"] {
-        background-color: #1f2937; /* Dark Charcoal */
+        background-color: #f1f3f5 !important;
+        border-right: 1px solid #dee2e6;
     }
-    /* Sidebar Text */
-    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span {
-        color: #f3f4f6 !important; /* Bright White */
+    section[data-testid="stSidebar"] .stMarkdown, 
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] p {
+        color: #000000 !important;
+    }
+
+    /* 7. Input Widgets (Selectbox, Inputs) */
+    .stSelectbox div[data-baseweb="select"] > div {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border-color: #ced4da !important;
     }
     
-    /* 5. Custom Info Box */
+    /* 8. Custom Info Box */
     .info-box {
-        background-color: #e0f2fe; /* Light Blue */
-        color: #0c4a6e; /* Dark Navy Text */
+        background-color: #e3f2fd !important;
+        color: #000000 !important;
         padding: 15px;
         border-radius: 8px;
-        border-left: 5px solid #0284c7; /* Blue Accent */
+        border-left: 5px solid #2196f3;
         margin-bottom: 20px;
-        font-size: 1rem;
     }
     
-    /* 6. Tabs styling for visibility */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+    /* 9. Tabs Styling */
+    button[data-baseweb="tab"] {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border: 1px solid #dee2e6 !important;
     }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #ffffff;
-        border-radius: 4px;
-        color: #374151; /* Dark text */
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background-color: #007bff !important;
+        color: #ffffff !important; /* Keep active text white */
+        border: 1px solid #007bff !important;
     }
-    .stTabs [aria-selected="true"] {
-        background-color: #2563eb; /* Blue active tab */
-        color: #ffffff !important; /* White text on active */
+    
+    /* 10. Buttons */
+    button[kind="primary"] {
+        background-color: #007bff !important;
+        color: #ffffff !important;
+        border: none !important;
+    }
+    button[kind="secondary"] {
+        background-color: #e2e6ea !important;
+        color: #000000 !important;
+        border: 1px solid #ced4da !important;
     }
 </style>
 """, unsafe_allow_html=True)
