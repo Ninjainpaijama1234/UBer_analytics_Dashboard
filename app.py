@@ -38,37 +38,78 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Beautification
+# Custom CSS for High Contrast & Visibility
 st.markdown("""
 <style>
-    /* Main Background */
+    /* 1. Main App Background & Text */
     .stApp {
-        background-color: #f8f9fa;
+        background-color: #f0f2f6; /* Light gray-blue background */
+        color: #000000; /* Enforce black text globally */
     }
-    /* Metric Cards */
-    div[data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
-    }
-    /* Headers */
-    h1, h2, h3 {
-        color: #2c3e50;
+    
+    /* 2. Headers - Force Black */
+    h1, h2, h3, h4, h5, h6 {
+        color: #111111 !important;
         font-family: 'Segoe UI', sans-serif;
+        font-weight: 600;
     }
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background-color: #2c3e50;
-    }
-    /* Custom Info Box */
-    .info-box {
-        background-color: #e8f4f8;
+    
+    /* 3. Metric Cards - High Contrast */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff; /* Pure white background */
+        border: 1px solid #d1d5db; /* Visible grey border */
         padding: 15px;
         border-radius: 8px;
-        border-left: 5px solid #3498db;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        color: #000000; /* Black text */
+    }
+    
+    /* Metric Label (Small top text) */
+    div[data-testid="stMetricLabel"] {
+        color: #374151 !important; /* Dark Gray */
+        font-size: 1rem;
+        font-weight: 600;
+    }
+    
+    /* Metric Value (Big number) */
+    div[data-testid="stMetricValue"] {
+        color: #000000 !important; /* Pure Black */
+        font-weight: 700;
+    }
+    
+    /* 4. Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #1f2937; /* Dark Charcoal */
+    }
+    /* Sidebar Text */
+    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span {
+        color: #f3f4f6 !important; /* Bright White */
+    }
+    
+    /* 5. Custom Info Box */
+    .info-box {
+        background-color: #e0f2fe; /* Light Blue */
+        color: #0c4a6e; /* Dark Navy Text */
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 5px solid #0284c7; /* Blue Accent */
         margin-bottom: 20px;
+        font-size: 1rem;
+    }
+    
+    /* 6. Tabs styling for visibility */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #ffffff;
+        border-radius: 4px;
+        color: #374151; /* Dark text */
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #2563eb; /* Blue active tab */
+        color: #ffffff !important; /* White text on active */
     }
 </style>
 """, unsafe_allow_html=True)
