@@ -713,96 +713,158 @@ elif page == "8. 🎯 Customer Segmentation":
     st.title("🎯 Customer/Ride Segmentation")
     st.markdown("""
     <div class='info-box'>
-    <b>Smart Segmentation:</b> We group rides into distinct "Personas".
-    Use these personas to tailor marketing campaigns (e.g., discounts for "Budget Commuters", loyalty perks for "Premium Long-Haul").
+    <b>Two Ways to Segment:</b>
+    1. <b>AI Behavioral:</b> Groups rides by physical characteristics (Price, Distance, Rating).
+    2. <b>RFM Analysis:</b> Groups customers by their loyalty and value (Recency, Frequency, Monetary).
     </div>
     """, unsafe_allow_html=True)
     
     if st.session_state['engineered_df'] is not None:
         df = st.session_state['engineered_df'].copy()
-        k = st.slider("Number of Segments", 2, 6, 4)
         
-        if st.button("Run Advanced Segmentation"):
-            feat = ['Booking Value', 'Ride Distance', 'Driver Ratings']
-            available_feats = [f for f in feat if f in df.columns]
+        # Two Tabs
+        tab_ai, tab_rfm = st.tabs(["🧠 AI Behavioral Clusters", "🛒 RFM Analysis"])
+        
+        # --- TAB 1: EXISTING K-MEANS ---
+        with tab_ai:
+            k = st.slider("Number of Segments", 2, 6, 4)
             
-            # Scale Data
-            scaler = StandardScaler()
-            X = scaler.fit_transform(df[available_feats].fillna(0))
-            
-            # Fit Model
-            kmeans = KMeans(n_clusters=k, random_state=42)
-            df['Cluster'] = kmeans.fit_predict(X)
-            
-            # --- INTELLIGENT PERSONA NAMING ---
-            cluster_summary = df.groupby('Cluster')[available_feats].mean()
-            
-            def get_persona_name(row):
-                # Simple logic to auto-name clusters
-                val = row['Booking Value']
-                dist = row['Ride Distance']
-                avg_val = cluster_summary['Booking Value'].mean()
-                avg_dist = cluster_summary['Ride Distance'].mean()
+            if st.button("Run Behavioral Segmentation"):
+                feat = ['Booking Value', 'Ride Distance', 'Driver Ratings']
+                available_feats = [f for f in feat if f in df.columns]
                 
-                if val > avg_val * 1.2 and dist > avg_dist * 1.2: return "💎 Premium Long-Haul"
-                if val > avg_val * 1.2 and dist < avg_dist: return "⚡ High-Value Short"
-                if val < avg_val and dist > avg_dist: return "📉 Budget Long-Distance"
-                if val < avg_val and dist < avg_dist: return "🛵 Budget Commuter"
-                return "📍 Standard Rider"
+                # Scale Data
+                scaler = StandardScaler()
+                X = scaler.fit_transform(df[available_feats].fillna(0))
+                
+                # Fit Model
+                kmeans = KMeans(n_clusters=k, random_state=42)
+                df['Cluster'] = kmeans.fit_predict(X)
+                
+                # --- INTELLIGENT PERSONA NAMING ---
+                cluster_summary = df.groupby('Cluster')[available_feats].mean()
+                
+                def get_persona_name(row):
+                    val = row['Booking Value']
+                    dist = row['Ride Distance']
+                    avg_val = cluster_summary['Booking Value'].mean()
+                    avg_dist = cluster_summary['Ride Distance'].mean()
+                    
+                    if val > avg_val * 1.2 and dist > avg_dist * 1.2: return "💎 Premium Long-Haul"
+                    if val > avg_val * 1.2 and dist < avg_dist: return "⚡ High-Value Short"
+                    if val < avg_val and dist > avg_dist: return "📉 Budget Long-Distance"
+                    if val < avg_val and dist < avg_dist: return "🛵 Budget Commuter"
+                    return "📍 Standard Rider"
 
-            cluster_summary['Persona'] = cluster_summary.apply(get_persona_name, axis=1)
-            
-            # Merge Persona back to main df
-            persona_map = cluster_summary['Persona'].to_dict()
-            df['Persona'] = df['Cluster'].map(persona_map)
-            
-            st.success("Segmentation Complete! Personas Identified.")
-            
-            # --- VISUALIZATION GRID ---
-            st.subheader("1. Segment Profiles (Radar Chart)")
-            st.markdown("Comparing relative strengths of each persona (Scale: 0-1 normalized).")
-            
-            # Normalize for Radar
-            mm_scaler = MinMaxScaler()
-            radar_data = pd.DataFrame(mm_scaler.fit_transform(cluster_summary[available_feats]), 
-                                     columns=available_feats, index=cluster_summary.index)
-            radar_data['Persona'] = cluster_summary['Persona']
-            
-            fig_radar = go.Figure()
-            for i in range(k):
-                persona_name = radar_data.iloc[i]['Persona']
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=radar_data.iloc[i][available_feats],
-                    theta=available_feats,
-                    fill='toself',
-                    name=f'{persona_name}'
-                ))
-            fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)), title="Persona Fingerprints")
-            st.plotly_chart(fig_radar, use_container_width=True)
-            
-            # --- BOX PLOTS ---
-            st.subheader("2. Deep Dive: Attribute Distribution")
-            col1, col2 = st.columns(2)
-            with col1:
-                fig_box1 = px.box(df, x="Persona", y="Booking Value", color="Persona", title="Spending Power by Persona")
-                st.plotly_chart(fig_box1, use_container_width=True)
-            with col2:
-                fig_box2 = px.box(df, x="Persona", y="Ride Distance", color="Persona", title="Travel Distance by Persona")
-                st.plotly_chart(fig_box2, use_container_width=True)
+                cluster_summary['Persona'] = cluster_summary.apply(get_persona_name, axis=1)
                 
-            # --- SUMMARY TABLE ---
-            st.subheader("3. Segment Size & Value")
-            counts = df['Persona'].value_counts().reset_index()
-            counts.columns = ['Persona', 'Count']
-            counts['Percentage'] = (counts['Count'] / len(df) * 100).round(1).astype(str) + '%'
-            st.dataframe(counts)
+                # Merge Persona back to main df
+                persona_map = cluster_summary['Persona'].to_dict()
+                df['Persona'] = df['Cluster'].map(persona_map)
+                
+                st.success("Segmentation Complete! Personas Identified.")
+                
+                # --- VISUALIZATION GRID ---
+                st.subheader("1. Segment Profiles (Radar Chart)")
+                
+                # Normalize for Radar
+                mm_scaler = MinMaxScaler()
+                radar_data = pd.DataFrame(mm_scaler.fit_transform(cluster_summary[available_feats]), 
+                                         columns=available_feats, index=cluster_summary.index)
+                radar_data['Persona'] = cluster_summary['Persona']
+                
+                fig_radar = go.Figure()
+                for i in range(k):
+                    persona_name = radar_data.iloc[i]['Persona']
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=radar_data.iloc[i][available_feats],
+                        theta=available_feats,
+                        fill='toself',
+                        name=f'{persona_name}'
+                    ))
+                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)), title="Persona Fingerprints")
+                st.plotly_chart(fig_radar, use_container_width=True)
+                
+                st.download_button(
+                    "📥 Download Behavioral Segments",
+                    convert_df(df[['Booking ID', 'Persona', 'Booking Value', 'Ride Distance']]),
+                    "behavioral_segments.csv",
+                    "text/csv"
+                )
+
+        # --- TAB 2: RFM ANALYSIS (NEW) ---
+        with tab_rfm:
+            st.subheader("🛒 RFM Analysis")
+            st.markdown("""
+            **Recency (R):** Days since last ride.  
+            **Frequency (F):** Total number of rides.  
+            **Monetary (M):** Total revenue from customer.
+            """)
             
-            st.download_button(
-                "📥 Download Segmented Customers",
-                convert_df(df[['Booking ID', 'Persona', 'Booking Value', 'Ride Distance']]),
-                "customer_segments.csv",
-                "text/csv"
-            )
+            if 'Customer ID' in df.columns:
+                if st.button("Run RFM Analysis"):
+                    # 1. Filter completed rides
+                    rfm_df = df[df['Booking Status'] == 'Completed']
+                    
+                    # 2. Group by Customer
+                    latest_date = rfm_df['DateTime'].max() + pd.Timedelta(days=1)
+                    
+                    rfm_agg = rfm_df.groupby('Customer ID').agg({
+                        'DateTime': lambda x: (latest_date - x.max()).days,
+                        'Booking ID': 'count',
+                        'Booking Value': 'sum'
+                    }).reset_index()
+                    
+                    rfm_agg.columns = ['Customer ID', 'Recency', 'Frequency', 'Monetary']
+                    
+                    # 3. Create Quartiles (1-4)
+                    rfm_agg['R_Score'] = pd.qcut(rfm_agg['Recency'], 4, labels=[4, 3, 2, 1]) # Lower recency is better
+                    # For Frequency and Monetary, we might have duplicates/ties, so use rank method='first'
+                    rfm_agg['F_Score'] = pd.qcut(rfm_agg['Frequency'].rank(method='first'), 4, labels=[1, 2, 3, 4])
+                    rfm_agg['M_Score'] = pd.qcut(rfm_agg['Monetary'].rank(method='first'), 4, labels=[1, 2, 3, 4])
+                    
+                    # 4. Combine Scores
+                    rfm_agg['RFM_Score'] = rfm_agg['R_Score'].astype(str) + rfm_agg['F_Score'].astype(str) + rfm_agg['M_Score'].astype(str)
+                    
+                    # 5. Define Segments based on RFM Score
+                    def segment_rfm(row):
+                        r = int(row['R_Score'])
+                        f = int(row['F_Score'])
+                        
+                        if r >= 4 and f >= 4: return 'Champions'
+                        if r >= 3 and f >= 3: return 'Loyal Customers'
+                        if r >= 3 and f <= 2: return 'Potential Loyalists'
+                        if r <= 2 and f >= 3: return 'At Risk'
+                        if r <= 1 and f <= 2: return 'Hibernating'
+                        return 'Needs Attention'
+
+                    rfm_agg['Segment'] = rfm_agg.apply(segment_rfm, axis=1)
+                    
+                    # 6. Visualization - Treemap
+                    st.subheader("Customer Segments Overview")
+                    segment_counts = rfm_agg['Segment'].value_counts().reset_index()
+                    segment_counts.columns = ['Segment', 'Count']
+                    
+                    fig_treemap = px.treemap(segment_counts, path=['Segment'], values='Count', 
+                                            color='Count', color_continuous_scale='RdBu', title="RFM Customer Distribution")
+                    st.plotly_chart(fig_treemap, use_container_width=True)
+                    
+                    # 7. Scatter Plot (Recency vs Monetary)
+                    fig_scatter = px.scatter(rfm_agg, x='Recency', y='Monetary', color='Segment', 
+                                            title="Recency vs Monetary Value", hover_data=['Customer ID'])
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+                    
+                    # 8. Data Table
+                    st.dataframe(rfm_agg.head())
+                    
+                    st.download_button(
+                        "📥 Download RFM Segments",
+                        convert_df(rfm_agg),
+                        "rfm_analysis.csv",
+                        "text/csv"
+                    )
+            else:
+                st.error("Customer ID column not found in dataset.")
 
 # --- PAGE 9: FORECASTING ---
 elif page == "9. 📈 Demand Forecasting":
